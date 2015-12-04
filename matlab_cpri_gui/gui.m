@@ -22,7 +22,7 @@ function varargout = gui(varargin)
 
 % Edit the above text to modify the response to help gui
 
-% Last Modified by GUIDE v2.5 30-Nov-2015 23:33:25
+% Last Modified by GUIDE v2.5 04-Dec-2015 22:18:58
 
 % Begin initialization code - DO NOT EDIT
 gui_Singleton = 1;
@@ -96,60 +96,127 @@ if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgr
 end
 
 
-% --- Executes on button press in pushbutton1.
-function pushbutton1_Callback(hObject, eventdata, handles)
-% hObject    handle to pushbutton1 (see GCBO)
+% --- Executes on button press in open.
+function open_Callback(hObject, eventdata, handles)
+% hObject    handle to open (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 [filename,pathname]=uigetfile('*','打开文件');
-set(handles.showstr,'string',[pathname filename])
+if filename ~= 0
+    set(handles.showstr,'string',[pathname filename])
+    handles.file = [pathname filename];
+end
+guidata(hObject,handles);
 % --- If Enable == 'on', executes on mouse press in 5 pixel border.
-% --- Otherwise, executes on mouse press in 5 pixel border or over pushbutton1.
-function pushbutton1_ButtonDownFcn(hObject, eventdata, handles)
-% hObject    handle to pushbutton1 (see GCBO)
+% --- Otherwise, executes on mouse press in 5 pixel border or over open.
+function open_ButtonDownFcn(hObject, eventdata, handles)
+% hObject    handle to open (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
 
 
-% --- Executes on button press in pushbutton2.
-function pushbutton2_Callback(hObject, eventdata, handles)
-% hObject    handle to pushbutton2 (see GCBO)
+% --- Executes on button press in loadBtn.
+function loadBtn_Callback(hObject, eventdata, handles)
+% hObject    handle to loadBtn (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+cpri_rate = get(handles.cpriRate,'value')
+asicOrFpga = get(handles.asicOrFpga,'value');
+
+iq_jiaozhi = get(handles.iqJiaozhi,'value');
+iq_jiaohuan = get(handles.iqChange,'value');
+startbit = get(handles.startBitInputBox,'string')
+fid = fopen(handles.file);
+data = uint64(fscanf(fid,'%x'));
+cpriRate2ChipBitWidth = [ 1 2 4 6 8 10 16];
+cpriBitWidthPerFrame = cpriRate2ChipBitWidth(cpri_rate);
+
+if asicOrFpga == 1  %如果是芯片
+    cpriChipNumInPerCpriBasicFrame = 128;
+else                %如果是fpga
+    cpriChipNumInPerCpriBasicFrame = 32;
+    cpriBitWidthPerFrame = cpriBitWidthPerFrame*4;
+end
+ 
+%从cpri基本帧开始的数据，两行表示一个chip的数据
+cpriDataFromFrameStart = data;
+%将两行的数据转为一行，用u64标示,代表一个chip的数据,同样cpri速率下fpga数据是asic数据的4倍长
+cpriChipDataInRowRaw = bitshift(cpriDataFromFrameStart(2:2:end,1),32) + cpriDataFromFrameStart(1:2:end,1);
+%{
+此步数据一行为两个u32,代表一个chip，只有在大速率下才会用第一个u32，第二个u32表示低位
+0000000000000001     #chip0
+0000000000000002     #chip1
+0000000000000003     #chip2
+...
+%}
+%将采集的数据按128chip或32chip取整，即转化为正基本帧个chip数
+cpriChipNum = length(cpriChipDataInRowRaw);
+cpriChipNum = cpriChipNum - mod(cpriChipNum, cpriChipNumInPerCpriBasicFrame);
+cpriChipDataInRow = cpriChipDataInRowRaw(1:cpriChipNum);
+%将数据转换为一行为一个基本帧，对芯片来说128个chip一个基本帧，对fpga来说32个chip一个基本帧
+cpriBasicFrameDataInRow = reshape(cpriChipDataInRow, cpriChipNumInPerCpriBasicFrame, cpriChipNum/cpriChipNumInPerCpriBasicFrame)'
+%{
+此步数据一行代有一frame,
+0000000000000001   0000000000000002   0000000000000003     ...  0000000000000080 #frame0
+0000000000000001   0000000000000002   0000000000000003     ...  0000000000000080 #frame1
+0000000000000001   0000000000000002   0000000000000003     ...  0000000000000080 #frame2
+...
+%}
+
+
+function data = getAxc(cpriFrame,startbit,bitlen,cpriBitWidthPerFrame)
+    startChip       = startbit/cpriBitWidthPerFrame;
+    firstBitsInChip = mod(startbit,cpriBitWidthPerFrame);
+    startBitInChip  = firstBitsInChip - 1;
+    middleChipNum   = (startbit - (startBitInChip+1))/cpriBitWidthPerFrame;
+    lastChip        = startChip + middleChipNum + 1;
+    lastBitsInChip  = mod((startbit - (startBitInChip+1)),cpriBitWidthPerFrame);
+
+    firstBitM = bitshift(cpriFrame(:,startChip),-int32(firstBitsInChip));
+    middleBitM = cpriFrame(:,startChip+1:startChip+middleChipNum);
+    lastBitM = bitand(cpriFrame(:,lastChip),bitshift(uint32(1),lastBitsInChip)-uint32(1));
+    axc = [firstBitM middleBitM lastBitM]
+    [row col] = size(axc);
+    data = uint32(zeros(row,col));
+    for i = 1:col
+       data = bitor(data,bitshift(axc(:,i), firstBitsInChip*(i>1)+cpriBitWidthPerFrame*(i-1)));
+    end
+ 
+
+
+   
+
+% --- Executes on button press in iqJiaozhi.
+function iqJiaozhi_Callback(hObject, eventdata, handles)
+% hObject    handle to iqJiaozhi (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
+% Hint: get(hObject,'Value') returns toggle state of iqJiaozhi
 
-% --- Executes on button press in checkbox1.
-function checkbox1_Callback(hObject, eventdata, handles)
-% hObject    handle to checkbox1 (see GCBO)
+
+% --- Executes on button press in iqChange.
+function iqChange_Callback(hObject, eventdata, handles)
+% hObject    handle to iqChange (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
-% Hint: get(hObject,'Value') returns toggle state of checkbox1
+% Hint: get(hObject,'Value') returns toggle state of iqChange
 
 
-% --- Executes on button press in checkbox2.
-function checkbox2_Callback(hObject, eventdata, handles)
-% hObject    handle to checkbox2 (see GCBO)
+% --- Executes on selection change in cpriRate.
+function cpriRate_Callback(hObject, eventdata, handles)
+% hObject    handle to cpriRate (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
-% Hint: get(hObject,'Value') returns toggle state of checkbox2
-
-
-% --- Executes on selection change in popupmenu1.
-function popupmenu1_Callback(hObject, eventdata, handles)
-% hObject    handle to popupmenu1 (see GCBO)
-% eventdata  reserved - to be defined in a future version of MATLAB
-% handles    structure with handles and user data (see GUIDATA)
-
-% Hints: contents = cellstr(get(hObject,'String')) returns popupmenu1 contents as cell array
-%        contents{get(hObject,'Value')} returns selected item from popupmenu1
-
+% Hints: contents = cellstr(get(hObject,'String')) returns cpriRate contents as cell array
+%        contents{get(hObject,'Value')} returns selected item from cpriRate
 
 % --- Executes during object creation, after setting all properties.
-function popupmenu1_CreateFcn(hObject, eventdata, handles)
-% hObject    handle to popupmenu1 (see GCBO)
+function cpriRate_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to cpriRate (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    empty - handles not created until after all CreateFcns called
 
@@ -160,19 +227,21 @@ if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgr
 end
 
 
-% --- Executes on selection change in popupmenu2.
-function popupmenu2_Callback(hObject, eventdata, handles)
-% hObject    handle to popupmenu2 (see GCBO)
+% --- Executes on selection change in asicOrFpga.
+function asicOrFpga_Callback(hObject, eventdata, handles)
+ 
+
+% hObject    handle to asicOrFpga (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
-% Hints: contents = cellstr(get(hObject,'String')) returns popupmenu2 contents as cell array
-%        contents{get(hObject,'Value')} returns selected item from popupmenu2
+% Hints: contents = cellstr(get(hObject,'String')) returns asicOrFpga contents as cell array
+%        contents{get(hObject,'Value')} returns selected item from asicOrFpga
 
 
 % --- Executes during object creation, after setting all properties.
-function popupmenu2_CreateFcn(hObject, eventdata, handles)
-% hObject    handle to popupmenu2 (see GCBO)
+function asicOrFpga_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to asicOrFpga (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    empty - handles not created until after all CreateFcns called
 
@@ -206,19 +275,19 @@ if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgr
 end
 
 
-% --- Executes on selection change in popupmenu3.
-function popupmenu3_Callback(hObject, eventdata, handles)
-% hObject    handle to popupmenu3 (see GCBO)
+% --- Executes on selection change in axcNum.
+function axcNum_Callback(hObject, eventdata, handles)
+% hObject    handle to axcNum (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
-% Hints: contents = cellstr(get(hObject,'String')) returns popupmenu3 contents as cell array
-%        contents{get(hObject,'Value')} returns selected item from popupmenu3
+% Hints: contents = cellstr(get(hObject,'String')) returns axcNum contents as cell array
+%        contents{get(hObject,'Value')} returns selected item from axcNum
 
 
 % --- Executes during object creation, after setting all properties.
-function popupmenu3_CreateFcn(hObject, eventdata, handles)
-% hObject    handle to popupmenu3 (see GCBO)
+function axcNum_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to axcNum (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    empty - handles not created until after all CreateFcns called
 
@@ -230,18 +299,18 @@ end
 
 
 
-function edit3_Callback(hObject, eventdata, handles)
-% hObject    handle to edit3 (see GCBO)
+function startBitInputBox_Callback(hObject, eventdata, handles)
+% hObject    handle to startBitInputBox (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
-% Hints: get(hObject,'String') returns contents of edit3 as text
-%        str2double(get(hObject,'String')) returns contents of edit3 as a double
+% Hints: get(hObject,'String') returns contents of startBitInputBox as text
+%        str2double(get(hObject,'String')) returns contents of startBitInputBox as a double
 
 
 % --- Executes during object creation, after setting all properties.
-function edit3_CreateFcn(hObject, eventdata, handles)
-% hObject    handle to edit3 (see GCBO)
+function startBitInputBox_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to startBitInputBox (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    empty - handles not created until after all CreateFcns called
 
@@ -253,18 +322,18 @@ end
 
 
 
-function edit4_Callback(hObject, eventdata, handles)
-% hObject    handle to edit4 (see GCBO)
+function axcWidthInputBox_Callback(hObject, eventdata, handles)
+% hObject    handle to axcWidthInputBox (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
-% Hints: get(hObject,'String') returns contents of edit4 as text
-%        str2double(get(hObject,'String')) returns contents of edit4 as a double
+% Hints: get(hObject,'String') returns contents of axcWidthInputBox as text
+%        str2double(get(hObject,'String')) returns contents of axcWidthInputBox as a double
 
 
 % --- Executes during object creation, after setting all properties.
-function edit4_CreateFcn(hObject, eventdata, handles)
-% hObject    handle to edit4 (see GCBO)
+function axcWidthInputBox_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to axcWidthInputBox (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    empty - handles not created until after all CreateFcns called
 
@@ -273,3 +342,10 @@ function edit4_CreateFcn(hObject, eventdata, handles)
 if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgroundColor'))
     set(hObject,'BackgroundColor','white');
 end
+
+
+% --- Executes on button press in psdBtn.
+function psdBtn_Callback(hObject, eventdata, handles)
+% hObject    handle to psdBtn (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
