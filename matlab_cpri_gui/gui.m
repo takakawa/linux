@@ -22,7 +22,7 @@ function varargout = gui(varargin)
 
 % Edit the above text to modify the response to help gui
 
-% Last Modified by GUIDE v2.5 04-Dec-2015 22:18:58
+% Last Modified by GUIDE v2.5 05-Dec-2015 22:58:34
 
 % Begin initialization code - DO NOT EDIT
 gui_Singleton = 1;
@@ -102,6 +102,7 @@ function open_Callback(hObject, eventdata, handles)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 [filename,pathname]=uigetfile('*','打开文件');
+handles.file = ''
 if filename ~= 0
     set(handles.showstr,'string',[pathname filename])
     handles.file = [pathname filename];
@@ -126,8 +127,21 @@ asicOrFpga = get(handles.asicOrFpga,'value');
 
 iq_jiaozhi = get(handles.iqJiaozhi,'value');
 iq_jiaohuan = get(handles.iqChange,'value');
-startbit = get(handles.startBitInputBox,'string')
+axcStartBit = str2num(get(handles.startBitInputBox,'string'));
+axcNum = get(handles.axcNum,'value');
+axcBitwidth = str2num(get(handles.axcWidthInputBox,'string'));
+
+if isempty(axcStartBit) || isempty(axcBitwidth)
+    msgbox('axcStartBit or axcBitwidth is wrong!')
+    return
+end
+
 fid = fopen(handles.file);
+if fid == -1
+    msgbox('file open error')
+    return
+end
+
 data = uint64(fscanf(fid,'%x'));
 cpriRate2ChipBitWidth = [ 1 2 4 6 8 10 16];
 cpriBitWidthPerFrame = cpriRate2ChipBitWidth(cpri_rate);
@@ -155,7 +169,7 @@ cpriChipNum = length(cpriChipDataInRowRaw);
 cpriChipNum = cpriChipNum - mod(cpriChipNum, cpriChipNumInPerCpriBasicFrame);
 cpriChipDataInRow = cpriChipDataInRowRaw(1:cpriChipNum);
 %将数据转换为一行为一个基本帧，对芯片来说128个chip一个基本帧，对fpga来说32个chip一个基本帧
-cpriBasicFrameDataInRow = reshape(cpriChipDataInRow, cpriChipNumInPerCpriBasicFrame, cpriChipNum/cpriChipNumInPerCpriBasicFrame)'
+cpriBasicFrameDataInRow = reshape(cpriChipDataInRow, cpriChipNumInPerCpriBasicFrame, cpriChipNum/cpriChipNumInPerCpriBasicFrame)';
 %{
 此步数据一行代有一frame,
 0000000000000001   0000000000000002   0000000000000003     ...  0000000000000080 #frame0
@@ -163,22 +177,22 @@ cpriBasicFrameDataInRow = reshape(cpriChipDataInRow, cpriChipNumInPerCpriBasicFr
 0000000000000001   0000000000000002   0000000000000003     ...  0000000000000080 #frame2
 ...
 %}
-
+axcInfo = getAxc(cpriBasicFrameDataInRow,axcStartBit,axcBitwidth,cpriBitWidthPerFrame);
 
 function data = getAxc(cpriFrame,startbit,bitlen,cpriBitWidthPerFrame)
     startChip       = startbit/cpriBitWidthPerFrame;
     firstBitsInChip = mod(startbit,cpriBitWidthPerFrame);
-    startBitInChip  = firstBitsInChip - 1;
-    middleChipNum   = (startbit - (startBitInChip+1))/cpriBitWidthPerFrame;
+    startBitInChip  = firstBitsInChip;
+    middleChipNum   = (bitlen - (cpriBitWidthPerFrame - firstBitsInChip))/cpriBitWidthPerFrame;
     lastChip        = startChip + middleChipNum + 1;
     lastBitsInChip  = mod((startbit - (startBitInChip+1)),cpriBitWidthPerFrame);
 
     firstBitM = bitshift(cpriFrame(:,startChip),-int32(firstBitsInChip));
     middleBitM = cpriFrame(:,startChip+1:startChip+middleChipNum);
-    lastBitM = bitand(cpriFrame(:,lastChip),bitshift(uint32(1),lastBitsInChip)-uint32(1));
-    axc = [firstBitM middleBitM lastBitM]
+    lastBitM = bitand(cpriFrame(:,lastChip),bitshift(uint64(1),lastBitsInChip)-uint64(1));
+   axc = [firstBitM middleBitM lastBitM];
     [row col] = size(axc);
-    data = uint32(zeros(row,col));
+    data = uint64(0);
     for i = 1:col
        data = bitor(data,bitshift(axc(:,i), firstBitsInChip*(i>1)+cpriBitWidthPerFrame*(i-1)));
     end
@@ -349,3 +363,12 @@ function psdBtn_Callback(hObject, eventdata, handles)
 % hObject    handle to psdBtn (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
+
+
+% --- Executes during object creation, after setting all properties.
+function open_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to open (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    empty - handles not created until after all CreateFcns called
+handles.file = '';
+guidata(hObject,handles);
