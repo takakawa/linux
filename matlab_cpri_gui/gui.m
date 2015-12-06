@@ -22,7 +22,7 @@ function varargout = gui(varargin)
 
 % Edit the above text to modify the response to help gui
 
-% Last Modified by GUIDE v2.5 05-Dec-2015 22:58:34
+% Last Modified by GUIDE v2.5 06-Dec-2015 10:16:57
 
 % Begin initialization code - DO NOT EDIT
 gui_Singleton = 1;
@@ -143,7 +143,7 @@ if fid == -1
 end
 
 data = uint64(fscanf(fid,'%x'));
-cpriRate2ChipBitWidth = [ 1 2 4 6 8 10 16];
+cpriRate2ChipBitWidth = [1 2 4 6 8 10 16];
 cpriBitWidthPerFrame = cpriRate2ChipBitWidth(cpri_rate);
 
 if asicOrFpga == 1  %如果是芯片
@@ -177,27 +177,68 @@ cpriBasicFrameDataInRow = reshape(cpriChipDataInRow, cpriChipNumInPerCpriBasicFr
 0000000000000001   0000000000000002   0000000000000003     ...  0000000000000080 #frame2
 ...
 %}
-axcInfo = getAxc(cpriBasicFrameDataInRow,axcStartBit,axcBitwidth,cpriBitWidthPerFrame);
+axcInfo = getAxcs(cpriBasicFrameDataInRow,axcStartBit,axcBitwidth,cpriBitWidthPerFrame,axcNum);
 
-function data = getAxc(cpriFrame,startbit,bitlen,cpriBitWidthPerFrame)
-    startChip       = startbit/cpriBitWidthPerFrame;
-    firstBitsInChip = mod(startbit,cpriBitWidthPerFrame);
-    startBitInChip  = firstBitsInChip;
-    middleChipNum   = (bitlen - (cpriBitWidthPerFrame - firstBitsInChip))/cpriBitWidthPerFrame;
-    lastChip        = startChip + middleChipNum + 1;
-    lastBitsInChip  = mod((startbit - (startBitInChip+1)),cpriBitWidthPerFrame);
+IQ = jiejiaozhi(axcInfo,axcBitwidth);
 
-    firstBitM = bitshift(cpriFrame(:,startChip),-int32(firstBitsInChip));
-    middleBitM = cpriFrame(:,startChip+1:startChip+middleChipNum);
-    lastBitM = bitand(cpriFrame(:,lastChip),bitshift(uint64(1),lastBitsInChip)-uint64(1));
-   axc = [firstBitM middleBitM lastBitM];
-    [row col] = size(axc);
-    data = uint64(0);
-    for i = 1:col
-       data = bitor(data,bitshift(axc(:,i), firstBitsInChip*(i>1)+cpriBitWidthPerFrame*(i-1)));
+function axcs = getAxcs(cpriFrame,startbit,bitlen,cpriBitWidthPerFrame,axcNum)
+    for i = 1:axcNum
+        axcPos(i,:) = [uint32(startbit+(i-1)*bitlen) uint32(bitlen)]
+        axcs(:,i) = getOneAxc(cpriFrame,axcPos(i,1),axcPos(i,2),cpriBitWidthPerFrame);
     end
- 
 
+
+function data = getOneAxc(cpriFrame,startbit,bitlen,cpriBitWidthPerFrame)
+
+    startChip         = uint32(floor(startbit/cpriBitWidthPerFrame)+1);
+    firstBitsInChip   = uint32(mod(startbit,cpriBitWidthPerFrame));%未使用的bits,如果一个chip为4bit,那起始为15的话，使用的是第4个chip的后2bit开始的
+    startBitInChip    = firstBitsInChip;
+    fristChipBitsUsed = cpriBitWidthPerFrame - firstBitsInChip;%第一个chip中使用的bit数，在一个chip的高位bit
+    middleChipNum     = uint32(floor((bitlen - fristChipBitsUsed)/cpriBitWidthPerFrame));
+    lastChip          = startChip + middleChipNum + 1;
+    lastBitsInChip    = uint32(mod((bitlen - fristChipBitsUsed),cpriBitWidthPerFrame));
+
+    %提取AXC的时候分为三部分，第一部分是第一个chip，可能使用高位的bit，第二部分是中间的使用完整chip的部分，第三部分是使用最后chip的低位部分
+    %第一部分
+    firtBitsMask = bitshift(uint64(1),fristChipBitsUsed)-uint64(1);
+    firstBitsRightShitNum = -int32(firstBitsInChip);%将高位移到低位，帮右移，需要为负
+    firstBitM  = bitand(bitshift(cpriFrame(:,startChip),firstBitsRightShitNum),firtBitsMask);
+    %第二部分
+    middleBitsMask = bitshift(uint64(1),cpriBitWidthPerFrame)-uint64(1);
+    middleChips    = startChip+1:startChip+middleChipNum;
+    middleBitM     = bitand(cpriFrame(:,middleChips),middleBitsMask);
+    %第三部分
+    lastBitsMask   = bitshift(uint64(1),lastBitsInChip)-uint64(1);
+    lastBitM       = bitand(cpriFrame(:,lastChip),    lastBitsMask);
+    
+    axc = [firstBitM middleBitM lastBitM];
+    [row col] = size(axc);
+    data = uint64(zeros(row,1));
+    for i = uint32(1:col)
+        startBitOffset = fristChipBitsUsed;
+        addOffSet = uint32(i>1);%第1个不加offset后边只加一次offset
+        addHowManyChip = (i-2)*uint32(i>1);%第1个不移位 第2个只移位offset，后边每次要加cpriBitWidthPerFrame
+        bitsTotalShift = startBitOffset*addOffSet + uint32(cpriBitWidthPerFrame)*addHowManyChip;
+        data = bitor(data,bitshift(axc(:,i), bitsTotalShift));
+    end
+function IQ = jiejiaozhi(axcdata,axcWidth)
+    I = uint64(zeros(size(axcdata)));
+    Q = uint64(zeros(size(axcdata)));
+     
+    for iBitCnt = 1:2:axcWidth
+        I = bitor(I,bitshift(bitget(axcdata,iBitCnt),uint32(iBitCnt/2)-1));
+    end
+    for qBitCnt = 2:2:axcWidth
+        Q = bitor(Q,bitshift(bitget(axcdata,qBitCnt),uint32(qBitCnt/2)-1));
+    end
+    IQ = complex(I,Q)
+function IQ = bujiejiaozhi(axcdata,axcWidth)
+         mask = bitshift(uint64(1),axcWidth/2)-1;
+         I = bitand(axcdata,mask);
+         Q = bitand(bitshift(axcdata,-(axcWdth/2)),mask);
+         IQ = complex(I,Q);
+        
+        
 
    
 
