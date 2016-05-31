@@ -113,6 +113,7 @@ isPalindrome2 (a:ls) = a == (last ls) && isPalindrome2 (init ls)
 {-1-}
 data NestedList a = Elem a | List [NestedList a] 
 
+data MyList
 
 
 
